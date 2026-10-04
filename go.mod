@@ -1,6 +1,6 @@
 module github.com/go-webengine/esbuildsandbox
 
-go 1.26.4
+go 1.27.1
 
 require github.com/evanw/esbuild v0.28.2
 
