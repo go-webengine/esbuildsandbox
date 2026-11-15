@@ -1,0 +1,105 @@
+name: vuln
+
+# ⛔ THIS REPOSITORY HAD NO VULNERABILITY LANE AT ALL, and it is named in the
+# fleet's list of repositories with a NETWORK SURFACE
+# (go-fleettools/fleettools/.github/vulnscan-exposed.txt, under "the browser:
+# network in, untrusted HTML parsed"). Measured here on 2026-11-15:
+#
+#   gofloor --floor 1.27.4 go-webengine
+#     go-webengine/esbuildsandbox   go 1.27.4   ci go-version-file
+#                                   govulncheck: none
+#     FOUND  no govulncheck step
+#
+# ⛔ AND ITS FLOOR WAS THE FURTHEST BEHIND OF THE NINE. The same morning,
+# `modfloor --floor 1.27.4` read the directive this module PUBLISHED at v0.2.0
+# as `go 1.27.1` — three patch releases behind GO-2026-6859's fix — while eight
+# of the nine network-facing modules read BELOW. That was found by a sweep
+# somebody chose to run, not by anything in this repository. This lane is the
+# half that does not depend on being remembered.
+#
+# WHY A WORKFLOW OF ITS OWN, not a job in ci.yml: a gate that only fires on a
+# push has the coverage of the repository's ACTIVITY, and the quietest
+# repository needs it most — an advisory does not wait for anybody to commit.
+# Putting a schedule on ci.yml would instead run its whole matrix nightly to ask
+# a question about dependencies. Daily rather than weekly because the
+# vulnerability database is updated on business days.
+#
+# ⛔ THE CRON TIME IS A REQUEST, NOT AN APPOINTMENT — GitHub runs scheduled
+# workflows late — and a DISABLED cron reports nothing rather than failing,
+# because GitHub switches scheduled workflows off after 60 days without
+# repository activity. Hence workflow_dispatch, and hence this comment: silence
+# on this lane is not green.
+#
+# ⚠ THE SHAPE IS go-webengine/browserproxy's vuln.yml, a sibling in this
+# organisation, reused deliberately rather than reinvented. What is NOT copied
+# is its justification: browserproxy's comment records ITS own reachable
+# advisories (GO-2026-6860 through html.Parse), and presenting another
+# repository's incident as this one's is how a comment stops being evidence.
+# The measurements above are this repository's.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '47 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vuln:
+    name: govulncheck, judged by vulngate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # ⛔ FROM go.mod, AND THAT IS NOW TRUE OF ci.yml TOO. The declared floor is
+      # what a consumer running `go install` with GOTOOLCHAIN=local honours, so
+      # it is the version this question is about. ci.yml used to pin
+      # `go-version: '1.27.3'` as a literal; raising the directive to 1.27.4
+      # made every job REFUSE (`go.mod requires go >= 1.27.4`, since setup-go
+      # sets GOTOOLCHAIN=local), so both were converted in the same change.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # ⛔ SAY WHICH TOOLCHAIN RAN. The standard library is judged by ONE
+      # version, so a lane that silently resolved another answers a different
+      # question — and the toolchain is half the verdict: identical source
+      # reported eight standard-library advisories under go1.27.1 and none under
+      # go1.27.2.
+      - run: go version
+
+      # ⛔ NO `set -o pipefail`, deliberately, and the `|| true` is not sloppy.
+      # govulncheck exits non-zero over findings it has itself decided this
+      # module does not CALL, and zero over some it has: its exit status answers
+      # a different question from the one this lane asks. That is why the stream
+      # is handed to vulngate instead of being believed. An unread scan is
+      # caught twice — by the emptiness test, and by vulngate, which believes a
+      # run only when it carried both a config AND an SBOM.
+      #
+      # ⛔ @latest FOR BOTH TOOLS, AND THAT IS AN ORG-SPECIFIC ANSWER RATHER
+      # THAN A HABIT. A version inside a `run:` block is read by no dependency
+      # manager: Renovate's gomod manager looks at go.mod and github-actions at
+      # `uses:`. Some organisations in this fleet close that hole with a custom
+      # manager matching `go install <module>@vN` — go-fleettools, go-crdt, and
+      # go-richdoc as of today. ⚠ CHECKED on 2026-11-15: go-webengine's preset
+      # (.github/default.json) carries NO such manager, so a pin here would rot
+      # unread, exactly as go-gitsafe's copy of this step sat 31 minor versions
+      # behind. For a judge whose value is knowing today's rules, newest is the
+      # correct answer here; if this organisation gains the manager, pin it and
+      # delete this paragraph.
+      - name: govulncheck, judged by vulngate
+        run: |
+          set -eu
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install github.com/go-fleettools/fleettools/cmd/vulngate@latest
+          BIN="$(go env GOPATH)/bin"
+          "$BIN/govulncheck" -format json ./... > /tmp/vuln.json || true
+          test -s /tmp/vuln.json || { echo "::error::govulncheck wrote nothing at all"; exit 1; }
+          # ⛔ TWO DASHES: vulngate moved to cobra, which does not accept a
+          # single dash for a long flag, and the compatibility shim warns on
+          # every run — a warning inside a green lane is a warning nobody reads.
+          "$BIN/vulngate" --go "$(go env GOVERSION)" /tmp/vuln.json
